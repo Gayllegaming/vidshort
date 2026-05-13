@@ -1,0 +1,98 @@
+import { CaptionStyle } from "@/components/RemotionShortPlayer";
+
+export const CAPTION_DESIGNS: { id: string; name: string; style: CaptionStyle }[] = [
+  {
+    id: "hormozi",
+    name: "The Hormozi",
+    style: {
+      fontSize: 140,
+      color: "#000000",
+      backgroundColor: "#FFFF00",
+      inactiveColor: "rgba(255, 255, 255, 0.6)",
+      inactiveBackgroundColor: "transparent",
+      fontWeight: "900",
+      textTransform: "uppercase",
+      borderRadius: 15,
+      padding: "15px 30px",
+      textShadow: "0 10px 30px rgba(0,0,0,0.5)",
+      fontFamily: "'Inter', sans-serif",
+    },
+  },
+  {
+    id: "beast",
+    name: "MrBeast Style",
+    style: {
+      fontSize: 160,
+      color: "#FFFFFF",
+      backgroundColor: "transparent",
+      inactiveColor: "rgba(255, 255, 255, 0.4)",
+      inactiveBackgroundColor: "transparent",
+      fontWeight: "900",
+      textTransform: "uppercase",
+      borderRadius: 0,
+      padding: "10px",
+      textShadow: "0 0 20px rgba(0,0,0,1), 0 0 20px rgba(0,0,0,1), 0 0 20px rgba(0,0,0,1)",
+      fontFamily: "'Oswald', sans-serif",
+    },
+  },
+  {
+    id: "minimal",
+    name: "Modern Minimal",
+    style: {
+      fontSize: 100,
+      color: "#FFFFFF",
+      backgroundColor: "rgba(0,0,0,0.4)",
+      inactiveColor: "rgba(255, 255, 255, 0.3)",
+      inactiveBackgroundColor: "transparent",
+      fontWeight: "500",
+      textTransform: "none",
+      borderRadius: 20,
+      padding: "12px 24px",
+      textShadow: "none",
+      fontFamily: "'Inter', sans-serif",
+    },
+  },
+  {
+    id: "neon",
+    name: "Cyber Neon",
+    style: {
+      fontSize: 130,
+      color: "#00FFFF",
+      backgroundColor: "transparent",
+      inactiveColor: "rgba(0, 255, 255, 0.2)",
+      inactiveBackgroundColor: "transparent",
+      fontWeight: "700",
+      textTransform: "uppercase",
+      borderRadius: 5,
+      padding: "10px 20px",
+      textShadow: "0 0 20px #00FFFF, 0 0 40px #00FFFF",
+      fontFamily: "'Roboto', sans-serif",
+    },
+  },
+  {
+    id: "vibrant",
+    name: "Vibrant Punch",
+    style: {
+      fontSize: 150,
+      color: "#FFFFFF",
+      backgroundColor: "#FF0055",
+      inactiveColor: "rgba(255, 255, 255, 0.5)",
+      inactiveBackgroundColor: "transparent",
+      fontWeight: "900",
+      textTransform: "uppercase",
+      borderRadius: 10,
+      padding: "15px 35px",
+      textShadow: "5px 5px 0px rgba(0,0,0,0.2)",
+      fontFamily: "'Montserrat', sans-serif",
+    },
+  }
+];
+
+export const FONT_OPTIONS = [
+  { label: "Inter (Modern)", value: "'Inter', sans-serif" },
+  { label: "Roboto (Bold)", value: "'Roboto', sans-serif" },
+  { label: "Montserrat (Classic)", value: "'Montserrat', sans-serif" },
+  { label: "Oswald (Condensed)", value: "'Oswald', sans-serif" },
+  { label: "Bangers (Comic)", value: "'Bangers', cursive" },
+  { label: "Outfit (Clean)", value: "'Outfit', sans-serif" },
+];
