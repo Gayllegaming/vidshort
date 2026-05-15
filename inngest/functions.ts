@@ -17,15 +17,16 @@ const ajPrompt = arcjet({
   rules: [detectPromptInjection({ mode: "LIVE" })],
 });
 
+/* =========================================================
+   PROCESS VIDEO FUNCTION
+========================================================= */
+
 export const processVideo = inngest.createFunction(
   {
     id: "process-video",
     triggers: [{ event: "video/process" }],
   },
   async ({ event, step }) => {
-    // =========================
-    // EVENT DATA
-    // =========================
     const { projectId, s3Key, contentType, fileName } =
       event.data as {
         projectId: string;
@@ -46,14 +47,12 @@ export const processVideo = inngest.createFunction(
       fileName,
     });
 
-    // =========================
-    // VERIFY VIDEO EXISTS IN S3
-    // =========================
+    // VERIFY FILE EXISTS
     await step.run("verify-s3-video", async () => {
       const bucketName = process.env.AWS_S3_BUCKET_NAME;
 
       if (!bucketName) {
-        throw new Error("AWS_S3_BUCKET_NAME is not defined");
+        throw new Error("AWS_S3_BUCKET_NAME missing");
       }
 
       try {
@@ -66,15 +65,12 @@ export const processVideo = inngest.createFunction(
 
         console.log("S3 VIDEO VERIFIED");
       } catch (error) {
-        console.error("S3 VERIFY ERROR:", error);
-
-        throw new Error("Uploaded video not found in S3");
+        console.error(error);
+        throw new Error("Video not found in S3");
       }
     });
 
-    // =========================
     // UPDATE STATUS
-    // =========================
     await step.run("update-status-uploaded", async () => {
       await db
         .update(Projects)
@@ -85,9 +81,7 @@ export const processVideo = inngest.createFunction(
         .where(eq(Projects.projectId, projectId));
     });
 
-    // =========================
     // GENERATE SIGNED URL
-    // =========================
     const videoUrl = await step.run(
       "generate-video-url",
       async () => {
@@ -96,7 +90,7 @@ export const processVideo = inngest.createFunction(
 
         if (!bucketName) {
           throw new Error(
-            "AWS_S3_BUCKET_NAME is not defined"
+            "AWS_S3_BUCKET_NAME missing"
           );
         }
 
@@ -113,15 +107,11 @@ export const processVideo = inngest.createFunction(
           }
         );
 
-        console.log("SIGNED URL GENERATED");
-
         return signedUrl;
       }
     );
 
-    // =========================
     // SAVE VIDEO URL
-    // =========================
     await step.run("save-video-url", async () => {
       await db
         .update(Projects)
@@ -133,38 +123,20 @@ export const processVideo = inngest.createFunction(
         .where(eq(Projects.projectId, projectId));
     });
 
-    // =========================
-    // VERIFY URL ACCESSIBLE
-    // =========================
+    // VERIFY ACCESSIBLE
     await step.run("verify-video-url", async () => {
-      try {
-        const response = await fetch(videoUrl, {
-          method: "HEAD",
-        });
+      const response = await fetch(videoUrl, {
+        method: "HEAD",
+      });
 
-        console.log(
-          "VIDEO URL STATUS:",
-          response.status
+      if (!response.ok) {
+        throw new Error(
+          `Video inaccessible: ${response.status}`
         );
-
-        if (!response.ok) {
-          throw new Error(
-            `Video URL inaccessible: ${response.status}`
-          );
-        }
-      } catch (error) {
-        console.error(
-          "VIDEO URL VERIFICATION FAILED:",
-          error
-        );
-
-        throw error;
       }
     });
 
-    // =========================
-    // UPDATE STATUS
-    // =========================
+    // TRANSCRIBING
     await step.run(
       "update-status-transcribing",
       async () => {
@@ -178,17 +150,11 @@ export const processVideo = inngest.createFunction(
       }
     );
 
-    // =========================
-    // TRANSCRIBE VIDEO
-    // =========================
+    // TRANSCRIPTION
     const transcriptionData = (await step.run(
       "transcribe-video",
       async () => {
         try {
-          console.log(
-            "STARTING DEEPGRAM TRANSCRIPTION"
-          );
-
           const response =
             await deepgram.listen.v1.media.transcribeUrl({
               url: videoUrl,
@@ -199,25 +165,14 @@ export const processVideo = inngest.createFunction(
               paragraphs: true,
             });
 
-          if (!response) {
-            throw new Error(
-              "Deepgram returned empty response"
-            );
-          }
-
           const result =
             (response as any).result ||
             (response as any).data ||
             response;
 
           if (!result.results) {
-            console.error(
-              "DEEPGRAM FULL RESPONSE:",
-              JSON.stringify(response, null, 2)
-            );
-
             throw new Error(
-              "Deepgram response missing results"
+              "Deepgram results missing"
             );
           }
 
@@ -229,20 +184,12 @@ export const processVideo = inngest.createFunction(
             result.results.channels?.[0]
               ?.alternatives?.[0]?.words || [];
 
-          console.log(
-            "TRANSCRIPTION SUCCESS:",
-            transcription.length
-          );
-
           return {
             transcription,
             captions: JSON.stringify(words),
           };
         } catch (error: any) {
-          console.error(
-            "DEEPGRAM ERROR:",
-            error
-          );
+          console.error(error);
 
           throw new Error(
             error?.message ||
@@ -255,9 +202,7 @@ export const processVideo = inngest.createFunction(
       captions: string;
     };
 
-    // =========================
     // SAVE TRANSCRIPTION
-    // =========================
     await step.run(
       "save-transcription",
       async () => {
@@ -274,9 +219,7 @@ export const processVideo = inngest.createFunction(
       }
     );
 
-    // =========================
     // GENERATE AI SHORTS
-    // =========================
     await step.run(
       "generate-ai-shorts",
       async () => {
@@ -284,16 +227,8 @@ export const processVideo = inngest.createFunction(
           !transcriptionData.transcription ||
           transcriptionData.transcription.length === 0
         ) {
-          console.warn(
-            "EMPTY TRANSCRIPTION - SKIPPING AI"
-          );
-
           return;
         }
-
-        console.log(
-          "CHECKING PROMPT INJECTION"
-        );
 
         const req = new Request(
           "https://localhost",
@@ -336,9 +271,7 @@ export const processVideo = inngest.createFunction(
           .where(eq(Projects.projectId, projectId));
 
         const prompt = `
-You are an expert viral short-form video editor.
-
-Analyze this transcript and identify the ${
+Analyze this transcript and find the ${
           AI_CONFIG.maxShorts
         } best viral moments.
 
@@ -346,101 +279,77 @@ Each clip must be between ${
           AI_CONFIG.minDuration
         } and ${AI_CONFIG.maxDuration} seconds.
 
-Return ONLY valid JSON array.
+Return ONLY JSON array:
 
-Format:
 [
-  {
-    "startTime": number,
-    "endTime": number,
-    "reason": string,
-    "seoScore": number
-  }
+ {
+   "startTime": number,
+   "endTime": number,
+   "reason": string,
+   "seoScore": number
+ }
 ]
 
 Transcript:
 ${transcriptionData.transcription}
 `;
 
+        const result =
+          await geminiModel.generateContent(
+            prompt
+          );
+
+        const response = await result.response;
+
+        let aiText = response.text();
+
+        aiText = aiText
+          .replace(/```json/gi, "")
+          .replace(/```/g, "")
+          .trim();
+
+        const shortsSegments =
+          JSON.parse(aiText);
+
+        let fullCaptions: any[] = [];
+
         try {
-          const result =
-            await geminiModel.generateContent(
-              prompt
+          fullCaptions = JSON.parse(
+            transcriptionData.captions || "[]"
+          );
+        } catch {}
+
+        for (const segment of shortsSegments) {
+          const segmentCaptions =
+            fullCaptions.filter(
+              (word: any) =>
+                word.end >= segment.startTime &&
+                word.start <= segment.endTime
             );
 
-          const response = await result.response;
-
-          let aiText = response.text();
-
-          aiText = aiText
-            .replace(/```json/gi, "")
-            .replace(/```/g, "")
-            .trim();
-
-          const shortsSegments =
-            JSON.parse(aiText);
-
-          console.log(
-            "AI SHORTS GENERATED:",
-            shortsSegments.length
-          );
-
-          let fullCaptions: any[] = [];
-
-          try {
-            fullCaptions = JSON.parse(
-              transcriptionData.captions || "[]"
-            );
-          } catch (error) {
-            console.warn(
-              "CAPTION PARSE FAILED"
-            );
-          }
-
-          for (const segment of shortsSegments) {
-            const segmentCaptions =
-              fullCaptions.filter(
-                (word: any) =>
-                  word.end >= segment.startTime &&
-                  word.start <= segment.endTime
-              );
-
-            await db.insert(VideoShorts).values({
-              projectId,
-              startTime: segment.startTime,
-              endTime: segment.endTime,
-              reason: segment.reason,
-              seoScore: segment.seoScore,
-              captions: JSON.stringify(
-                segmentCaptions
-              ),
-            });
-          }
-
-          await db
-            .update(Projects)
-            .set({
-              status: "shorts-generated",
-              progress: 95,
-            })
-            .where(eq(Projects.projectId, projectId));
-        } catch (error: any) {
-          console.error(
-            "GEMINI ERROR:",
-            error
-          );
-
-          throw new Error(
-            error?.message ||
-              "AI short generation failed"
-          );
+          await db.insert(VideoShorts).values({
+            projectId,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            reason: segment.reason,
+            seoScore: segment.seoScore,
+            captions: JSON.stringify(
+              segmentCaptions
+            ),
+          });
         }
+
+        await db
+          .update(Projects)
+          .set({
+            status: "shorts-generated",
+            progress: 95,
+          })
+          .where(eq(Projects.projectId, projectId));
       }
     );
 
-    // =========================
     // FINALIZE
-    // =========================
     await step.run("finalize-project", async () => {
       await db
         .update(Projects)
@@ -454,8 +363,218 @@ ${transcriptionData.transcription}
     return {
       success: true,
       videoUrl,
-      transcription:
-        transcriptionData.transcription,
+    };
+  }
+);
+
+/* =========================================================
+   RENDER VIDEO FUNCTION
+========================================================= */
+
+export const renderVideo = inngest.createFunction(
+  {
+    id: "render-video",
+    triggers: [{ event: "video/render" }],
+  },
+  async ({ event, step }) => {
+    const { shortId, projectId } = event.data as {
+      shortId: number;
+      projectId: string;
+    };
+
+    const short = await step.run(
+      "get-short-details",
+      async () => {
+        const result = await db
+          .select()
+          .from(VideoShorts)
+          .where(eq(VideoShorts.id, shortId))
+          .limit(1);
+
+        return result[0];
+      }
+    );
+
+    if (!short) {
+      throw new Error("Short not found");
+    }
+
+    const project = await step.run(
+      "get-project-details",
+      async () => {
+        const result = await db
+          .select()
+          .from(Projects)
+          .where(eq(Projects.projectId, projectId))
+          .limit(1);
+
+        return result[0];
+      }
+    );
+
+    if (!project?.videoUrl) {
+      throw new Error("Project video missing");
+    }
+
+    // UPDATE STATUS
+    await step.run(
+      "update-render-status",
+      async () => {
+        await db
+          .update(VideoShorts)
+          .set({
+            status: "rendering",
+            progress: 10,
+          })
+          .where(eq(VideoShorts.id, shortId));
+      }
+    );
+
+    // REMOTION RENDER
+    const renderResult = (await step.run(
+      "trigger-remotion-render",
+      async () => {
+        const { renderVideoOnLambda } =
+          await import("@remotion/lambda/client");
+
+        const fps = REMOTION_CONFIG.FPS;
+
+        const durationInFrames = Math.ceil(
+          (short.endTime - short.startTime) *
+            fps
+        );
+
+        const {
+          renderId,
+          bucketName: s3BucketName,
+        } = await renderVideoOnLambda({
+          region: REMOTION_CONFIG.REGION,
+          functionName:
+            REMOTION_CONFIG.FUNCTION_NAME,
+          composition:
+            REMOTION_CONFIG.COMPOSITION_ID,
+          serveUrl: REMOTION_CONFIG.SERVE_URL,
+          codec: "h264",
+          privacy: "public",
+          forceDurationInFrames:
+            durationInFrames,
+
+          inputProps: {
+            videoUrl: project.videoUrl,
+            startTime: short.startTime,
+            endTime: short.endTime,
+            captions: short.captions,
+            captionStyle: short.captionStyle
+              ? JSON.parse(short.captionStyle)
+              : {},
+          },
+        });
+
+        return {
+          renderId,
+          bucketName: s3BucketName,
+          region: REMOTION_CONFIG.REGION,
+        };
+      }
+    )) as any;
+
+    // POLL STATUS
+    let done = false;
+    let attempts = 0;
+
+    while (!done && attempts < 60) {
+      attempts++;
+
+      const status = (await step.run(
+        `check-render-${attempts}`,
+        async () => {
+          const { getRenderProgress } =
+            await import(
+              "@remotion/lambda/client"
+            );
+
+          return await getRenderProgress({
+            renderId: renderResult.renderId,
+            bucketName:
+              renderResult.bucketName,
+            functionName:
+              REMOTION_CONFIG.FUNCTION_NAME,
+            region: renderResult.region,
+          });
+        }
+      )) as any;
+
+      if (status.fatalErrorEncountered) {
+        await db
+          .update(VideoShorts)
+          .set({
+            status: "error",
+            progress: 0,
+          })
+          .where(eq(VideoShorts.id, shortId));
+
+        throw new Error(
+          status.errors?.[0]?.message ||
+            "Render failed"
+        );
+      }
+
+      if (status.done) {
+        done = true;
+
+        await step.run(
+          "finalize-render",
+          async () => {
+            await db
+              .update(VideoShorts)
+              .set({
+                status: "completed",
+                progress: 100,
+                videoUrl:
+                  status.outputFile || null,
+              })
+              .where(
+                eq(VideoShorts.id, shortId)
+              );
+          }
+        );
+      } else {
+        await step.run(
+          `update-progress-${attempts}`,
+          async () => {
+            await db
+              .update(VideoShorts)
+              .set({
+                progress: Math.round(
+                  status.overallProgress * 100
+                ),
+              })
+              .where(
+                eq(VideoShorts.id, shortId)
+              );
+          }
+        );
+
+        await step.sleep(
+          `wait-${attempts}`,
+          "10s"
+        );
+      }
+    }
+
+    if (!done) {
+      await db
+        .update(VideoShorts)
+        .set({
+          status: "error",
+        })
+        .where(eq(VideoShorts.id, shortId));
+
+      throw new Error("Render timeout");
+    }
+
+    return {
+      success: true,
     };
   }
 );
