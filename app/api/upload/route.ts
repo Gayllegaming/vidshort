@@ -10,35 +10,77 @@ import { eq } from "drizzle-orm";
 import arcjet, { fixedWindow, shield } from "@arcjet/next";
 
 const aj = arcjet({
-  key: process.env.ARCJET_KEY || "ajkey_placeholder",
+  key: process.env.ARCJET_KEY!,
   characteristics: ["userId"],
   rules: [
-    // Rate Limiting: Max 5 videos per day per user
     fixedWindow({
       mode: "LIVE",
       window: "1d",
       max: 50,
     }),
-    // AI Endpoint Abuse Protection (Bot protection)
-    shield({ mode: "LIVE" }),
+    shield({
+      mode: "LIVE",
+    }),
   ],
 });
 
 export async function POST(req: Request) {
+  console.log("UPLOAD API HIT");
+
   try {
+    // USER AUTH
     const user = await currentUser();
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const body = await req.json();
-    const { fileName, contentType, projectId: existingProjectId, complete } = body;
+    if (!user) {
+      console.log("NO USER");
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
 
-    // STEP 2: Handle upload completion
+    // SAFE JSON PARSE
+    let body;
+
+    try {
+      body = await req.json();
+    } catch (err) {
+      console.error("JSON PARSE ERROR:", err);
+
+      return NextResponse.json(
+        {
+          error:
+            "Invalid request body. Send JSON only, not FormData.",
+        },
+        { status: 400 }
+      );
+    }
+
+    console.log("BODY:", body);
+
+    const {
+      fileName,
+      contentType,
+      projectId: existingProjectId,
+      complete,
+    } = body;
+
+    // =========================
+    // STEP 2 - UPLOAD COMPLETE
+    // =========================
     if (complete && existingProjectId) {
+      console.log("UPLOAD COMPLETE FLOW");
+
       const s3Key = `projects/${existingProjectId}/${fileName}`;
-      
-      await db.update(Projects)
-        .set({ status: "uploaded" })
+
+      await db
+        .update(Projects)
+        .set({
+          status: "uploaded",
+        })
         .where(eq(Projects.projectId, existingProjectId));
+
+      console.log("SENDING INNGEST EVENT");
 
       await inngest.send({
         name: "video/process",
@@ -50,36 +92,91 @@ export async function POST(req: Request) {
         },
       });
 
-      return NextResponse.json({ success: true });
+      console.log("INNGEST EVENT SENT");
+
+      return NextResponse.json({
+        success: true,
+      });
     }
 
-    // STEP 1: Generate Presigned URL
+    // =========================
+    // STEP 1 - VALIDATION
+    // =========================
     if (!fileName || !contentType) {
-      return NextResponse.json({ error: "Missing file info" }, { status: 400 });
+      return NextResponse.json(
+        {
+          error: "Missing fileName or contentType",
+        },
+        { status: 400 }
+      );
     }
 
-    // Protect endpoint with Arcjet (only for step 1)
-    const decision = await aj.protect(req, { userId: user.id });
-    if (decision.isDenied()) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    // =========================
+    // ARCJET PROTECTION
+    // =========================
+    try {
+      const decision = await aj.protect(req, {
+        userId: user.id,
+      });
+
+      if (decision.isDenied()) {
+        console.log("ARCJET BLOCKED REQUEST");
+
+        return NextResponse.json(
+          {
+            error: "Too many uploads or suspicious activity",
+          },
+          { status: 403 }
+        );
+      }
+    } catch (arcjetError) {
+      console.error("ARCJET ERROR:", arcjetError);
+
+      // Continue even if Arcjet fails
     }
 
-    const projectId = Math.random().toString(36).substring(2, 15);
+    // =========================
+    // CREATE PROJECT
+    // =========================
+    const projectId = crypto.randomUUID();
+
     const s3Key = `projects/${projectId}/${fileName}`;
+
     const bucketName = process.env.AWS_S3_BUCKET_NAME;
 
     if (!bucketName) {
-      throw new Error("AWS_S3_BUCKET_NAME is not defined");
+      console.error("AWS BUCKET ENV MISSING");
+
+      return NextResponse.json(
+        {
+          error: "AWS bucket not configured",
+        },
+        { status: 500 }
+      );
     }
 
+    // =========================
+    // CREATE PRESIGNED URL
+    // =========================
     const command = new PutObjectCommand({
       Bucket: bucketName,
       Key: s3Key,
       ContentType: contentType,
     });
 
-    const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+    const presignedUrl = await getSignedUrl(
+      s3Client,
+      command,
+      {
+        expiresIn: 3600,
+      }
+    );
 
+    console.log("PRESIGNED URL CREATED");
+
+    // =========================
+    // SAVE PROJECT
+    // =========================
     await db.insert(Projects).values({
       projectId,
       createdBy: user.id,
@@ -87,9 +184,25 @@ export async function POST(req: Request) {
       progress: 0,
     });
 
-    return NextResponse.json({ projectId, presignedUrl, s3Key, success: true });
+    console.log("PROJECT SAVED");
+
+    // =========================
+    // RETURN RESPONSE
+    // =========================
+    return NextResponse.json({
+      success: true,
+      projectId,
+      presignedUrl,
+      s3Key,
+    });
   } catch (error: any) {
-    console.error("[Upload API Error]:", error);
-    return NextResponse.json({ error: error.message || "Internal Error" }, { status: 500 });
+    console.error("UPLOAD API ERROR:", error);
+
+    return NextResponse.json(
+      {
+        error: error?.message || "Internal Server Error",
+      },
+      { status: 500 }
+    );
   }
 }
